@@ -1,0 +1,759 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>ATM Inventory — NIB Field Ops</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #E4DFCE; }
+  #root { max-width: 1300px; margin: 0 auto; }
+</style>
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel">
+const { useState, useMemo, useEffect } = React;
+
+// ---- Persistence ----------------------------------------------------------
+// Data source priority: browser local storage (your edits) first, else the
+// bundled atms_data.json (the real NIB fleet list) fetched from this same
+// folder. This is a fully free, no-backend web app. Data you add/edit lives
+// only in the browser you're using — it won't sync across devices unless
+// you re-import atms_data.json there too.
+const STORAGE_KEY = "atm_inventory_data_v2";
+
+function saveData(data) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+  } catch (e) {
+    console.warn("Could not save data.", e);
+  }
+}
+
+function loadStoredData() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch (e) {
+    console.warn("Could not read saved data.", e);
+  }
+  return null;
+}
+
+// ---- Design tokens --------------------------------------------------------
+const ink = "#16233B", inkPanel = "#1D3050", paper = "#F1EEE4", paperMuted = "#E4DFCE";
+const brass = "#B8925A", moss = "#4B7A5B", rust = "#B25A3E", amber = "#C9922E";
+const inkText = "#EFEAD8", inkTextMuted = "#95A0B8";
+const mono = "ui-monospace, SFMono-Regular, Menlo, monospace";
+
+// ---- Minimal inline-SVG icon set (no external icon dependency) -----------
+function Icon({ name, size = 15, color = "currentColor" }) {
+  const s = { width: size, height: size, display: "inline-block", verticalAlign: "middle", flexShrink: 0 };
+  const common = { fill: "none", stroke: color, strokeWidth: 1.8, strokeLinecap: "round", strokeLinejoin: "round" };
+  const paths = {
+    grid: <><rect x="3" y="3" width="7" height="7" rx="1" {...common} /><rect x="14" y="3" width="7" height="7" rx="1" {...common} /><rect x="3" y="14" width="7" height="7" rx="1" {...common} /><rect x="14" y="14" width="7" height="7" rx="1" {...common} /></>,
+    server: <><rect x="3" y="4" width="18" height="7" rx="1.5" {...common} /><rect x="3" y="13" width="18" height="7" rx="1.5" {...common} /><circle cx="7" cy="7.5" r="0.6" fill={color} /><circle cx="7" cy="16.5" r="0.6" fill={color} /></>,
+    package: <><path d="M3 7l9-4 9 4-9 4-9-4z" {...common} /><path d="M3 7v10l9 4 9-4V7" {...common} /><path d="M12 11v10" {...common} /></>,
+    alert: <><path d="M12 3l10 18H2L12 3z" {...common} /><path d="M12 10v4" {...common} /><circle cx="12" cy="17" r="0.6" fill={color} /></>,
+    clipboard: <><rect x="5" y="4" width="14" height="17" rx="1.5" {...common} /><rect x="8" y="2" width="8" height="4" rx="1" {...common} /><path d="M8 11h8M8 15h5" {...common} /></>,
+    plus: <path d="M12 5v14M5 12h14" {...common} />,
+    x: <path d="M6 6l12 12M18 6L6 18" {...common} />,
+    pin: <><path d="M12 21s7-6.5 7-12a7 7 0 10-14 0c0 5.5 7 12 7 12z" {...common} /><circle cx="12" cy="9" r="2" {...common} /></>,
+    cash: <><rect x="2" y="6" width="20" height="12" rx="1.5" {...common} /><circle cx="12" cy="12" r="3" {...common} /></>,
+    receipt: <><path d="M5 3h14v18l-2-1.3L15 21l-2-1.3L11 21l-2-1.3L7 21l-2-1.3V3z" {...common} /><path d="M8 8h8M8 12h8" {...common} /></>,
+    card: <><rect x="2" y="5" width="20" height="14" rx="2" {...common} /><path d="M2 10h20" {...common} /></>,
+    printer: <><path d="M6 9V3h12v6" {...common} /><rect x="4" y="9" width="16" height="8" rx="1.5" {...common} /><path d="M6 17v4h12v-4" {...common} /></>,
+    wrench: <path d="M14.7 6.3a4 4 0 10-5.4 5.4L3 18l3 3 6.3-6.3a4 4 0 005.4-5.4l-2.8 2.8-2-2 2.8-2.8z" {...common} />,
+    trash: <path d="M4 7h16M9 7V4h6v3M6 7l1 13a1 1 0 001 1h8a1 1 0 001-1l1-13" {...common} />,
+    check: <path d="M4 12l6 6L20 6" {...common} />,
+    ban: <><circle cx="12" cy="12" r="9" {...common} /><path d="M6 6l12 12" {...common} /></>,
+    save: <><path d="M5 4h11l3 3v13H5z" {...common} /><path d="M8 4v5h8V4M8 14h8" {...common} /></>,
+    reset: <><path d="M3 12a9 9 0 109-9" {...common} /><path d="M3 4v5h5" {...common} /></>,
+    edit: <><path d="M12 20h9" {...common} /><path d="M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4z" {...common} /></>,
+    move: <><path d="M5 9l-3 3 3 3M19 9l3 3-3 3M9 5l3-3 3 3M9 19l3 3 3-3" {...common} /><path d="M2 12h20M12 2v20" {...common} /></>,
+    search: <><circle cx="11" cy="11" r="7" {...common} /><path d="M21 21l-4.3-4.3" {...common} /></>,
+    history: <><path d="M3 12a9 9 0 109-9 9 9 0 00-9 9z" {...common} /><path d="M12 7v5l3 3" {...common} /></>,
+  };
+  return <svg viewBox="0 0 24 24" style={s}>{paths[name] || null}</svg>;
+}
+
+const ITEM_TYPES = [
+  { value: "cash_cassette", label: "Cash cassette", icon: "cash" },
+  { value: "receipt_paper", label: "Receipt paper", icon: "receipt" },
+  { value: "card_stock", label: "Card stock", icon: "card" },
+  { value: "ink_ribbon", label: "Ink ribbon", icon: "printer" },
+  { value: "spare_part", label: "Spare part", icon: "wrench" },
+];
+
+const ATM_TYPES = [
+  { value: "lobby", label: "Lobby" },
+  { value: "through_the_wall", label: "Through-the-wall" },
+  { value: "drive_up", label: "Drive-up" },
+  { value: "off_premise", label: "Off-premise" },
+  { value: "cash_recycler", label: "Cash recycler" },
+  { value: "cash_dispenser", label: "Cash dispenser" },
+];
+
+const STATUS_META = {
+  active: { label: "Active", color: moss },
+  offline: { label: "Offline", color: rust },
+  maintenance: { label: "Maintenance", color: amber },
+  decommissioned: { label: "Decommissioned", color: inkTextMuted },
+};
+
+const REQUEST_STATUS_META = {
+  pending: { label: "Pending", color: amber },
+  approved: { label: "Approved", color: moss },
+  rejected: { label: "Rejected", color: rust },
+  installed: { label: "Installed", color: brass },
+};
+
+function uid() { return Math.random().toString(36).slice(2, 10); }
+function todayISO() { return new Date().toISOString().slice(0, 10); }
+function money(n) { return "ETB " + Number(n || 0).toLocaleString(); }
+
+// Minimal fallback used only if atms_data.json can't be fetched (e.g. this
+// preview isn't served over http). On the real published site this is
+// replaced by the full imported fleet list.
+function fallbackSeed() {
+  return {
+    atms: [
+      { id: "a1", code: "ATM-014", terminal_name: "Bole Edna ATM", serial_number: "SN-40211", atm_type: "lobby", location_type: "Branch", vendor: "NCR", location: "Bole Rd, near Edna Mall", district: "Bole", branch: "Bole Branch", region: "Addis Ababa", zone_subcity: "Bole", city_town: "Addis Ababa", status: "active", installed_date: "2022-04-11", insured_amount: 500000, operating_system: "Window10", latitude: null, longitude: null, street: null, deployment_history: [] },
+    ],
+    items: [],
+    requests: [],
+  };
+}
+
+function StatusBadge({ status, metaMap = STATUS_META }) {
+  const meta = metaMap[status] || metaMap.active;
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, fontFamily: mono, letterSpacing: 0.3, textTransform: "uppercase", color: meta.color }}>
+      <span style={{ width: 7, height: 7, borderRadius: 2, background: meta.color, display: "inline-block" }} />
+      {meta.label}
+    </span>
+  );
+}
+
+function StockGauge({ quantity, threshold }) {
+  const segments = 8;
+  const ratio = threshold > 0 ? quantity / (threshold * 2) : quantity > 0 ? 1 : 0;
+  const filled = Math.max(0, Math.min(segments, Math.round(ratio * segments)));
+  const low = quantity <= threshold;
+  const color = quantity === 0 ? rust : low ? amber : moss;
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+      <div style={{ display: "flex", gap: 2 }}>
+        {Array.from({ length: segments }).map((_, i) => (
+          <span key={i} style={{ width: 5, height: 14, background: i < filled ? color : "#D8D2BE", borderRadius: 1 }} />
+        ))}
+      </div>
+      <span style={{ fontFamily: mono, fontSize: 13, fontWeight: 600, color: quantity === 0 ? rust : "#2A2418", minWidth: 18 }}>{quantity}</span>
+    </div>
+  );
+}
+
+function Card({ children, style, onClick }) {
+  return <div onClick={onClick} style={{ background: "#FFFFFE", border: "1px solid #DCD6C2", borderRadius: 10, ...style }}>{children}</div>;
+}
+function PrimaryButton({ children, onClick, style }) {
+  return <button onClick={onClick} style={{ display: "inline-flex", alignItems: "center", gap: 6, background: ink, color: inkText, border: "none", borderRadius: 8, padding: "8px 14px", fontSize: 13, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap", ...style }}>{children}</button>;
+}
+function GhostButton({ children, onClick, style }) {
+  return <button onClick={onClick} style={{ display: "inline-flex", alignItems: "center", gap: 6, background: "transparent", color: "#5C563F", border: "1px solid #DCD6C2", borderRadius: 8, padding: "6px 12px", fontSize: 12, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap", ...style }}>{children}</button>;
+}
+function Field({ label, children }) {
+  return <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: "#6B6650", fontWeight: 600 }}>{label}{children}</label>;
+}
+const inputStyle = { border: "1px solid #DCD6C2", borderRadius: 6, padding: "8px 10px", fontSize: 13, fontFamily: "inherit", background: "#FBFAF5", color: "#2A2418", width: "100%" };
+
+function Modal({ title, onClose, children, width = 380 }) {
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(22,35,59,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 20, overflowY: "auto", padding: 20 }}>
+      <div style={{ background: paper, borderRadius: 12, width, maxWidth: "100%", padding: 20, border: `1px solid ${paperMuted}`, maxHeight: "90vh", overflowY: "auto" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+          <h3 style={{ margin: 0, fontSize: 15, fontWeight: 700, color: ink }}>{title}</h3>
+          <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", color: "#8A8468" }}><Icon name="x" size={18} /></button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+const ATM_FORM_EMPTY = {
+  code: "", terminal_name: "", serial_number: "", atm_type: "lobby", location_type: "Branch",
+  vendor: "", location: "", district: "", branch: "", region: "", zone_subcity: "", city_town: "",
+  status: "active", installed_date: "", insured_amount: "", operating_system: "",
+};
+
+function AtmFormFields({ form, setForm }) {
+  const [showMore, setShowMore] = useState(false);
+  return (
+    <div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+        <Field label="Terminal name"><input style={inputStyle} value={form.terminal_name} onChange={(e) => setForm({ ...form, terminal_name: e.target.value })} /></Field>
+        <Field label="ATM type"><select style={inputStyle} value={form.atm_type} onChange={(e) => setForm({ ...form, atm_type: e.target.value })}>{ATM_TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}</select></Field>
+        <Field label="District"><input style={inputStyle} value={form.district} onChange={(e) => setForm({ ...form, district: e.target.value })} /></Field>
+        <Field label="Serial number"><input style={inputStyle} value={form.serial_number} onChange={(e) => setForm({ ...form, serial_number: e.target.value })} /></Field>
+        <Field label="Status"><select style={inputStyle} value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}>{Object.entries(STATUS_META).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}</select></Field>
+        <Field label="Administering branch"><input style={inputStyle} value={form.branch} onChange={(e) => setForm({ ...form, branch: e.target.value })} /></Field>
+        <div style={{ gridColumn: "1 / -1" }}>
+          <Field label="Location"><input style={inputStyle} value={form.location} onChange={(e) => setForm({ ...form, location: e.target.value })} /></Field>
+        </div>
+      </div>
+
+      <button type="button" onClick={() => setShowMore((v) => !v)} style={{ background: "none", border: "none", color: brass, fontSize: 12, fontWeight: 600, cursor: "pointer", padding: "10px 0 0", display: "flex", alignItems: "center", gap: 4 }}>
+        {showMore ? "− Hide extra details" : "+ Add more details (optional)"}
+      </button>
+
+      {showMore && (
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 10 }}>
+          <Field label="Code / Terminal ID"><input style={inputStyle} value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} /></Field>
+          <Field label="Vendor"><input style={inputStyle} placeholder="NCR" value={form.vendor} onChange={(e) => setForm({ ...form, vendor: e.target.value })} /></Field>
+          <Field label="Location type"><input style={inputStyle} placeholder="Branch / Hotel / University..." value={form.location_type} onChange={(e) => setForm({ ...form, location_type: e.target.value })} /></Field>
+          <Field label="Operating system"><input style={inputStyle} value={form.operating_system} onChange={(e) => setForm({ ...form, operating_system: e.target.value })} /></Field>
+          <Field label="Region"><input style={inputStyle} value={form.region} onChange={(e) => setForm({ ...form, region: e.target.value })} /></Field>
+          <Field label="Zone / Sub-city"><input style={inputStyle} value={form.zone_subcity} onChange={(e) => setForm({ ...form, zone_subcity: e.target.value })} /></Field>
+          <Field label="City / Town"><input style={inputStyle} value={form.city_town} onChange={(e) => setForm({ ...form, city_town: e.target.value })} /></Field>
+          <Field label="Installed date"><input type="date" style={inputStyle} value={form.installed_date || ""} onChange={(e) => setForm({ ...form, installed_date: e.target.value })} /></Field>
+          <Field label="Insured amount (ETB)"><input type="number" style={inputStyle} value={form.insured_amount} onChange={(e) => setForm({ ...form, insured_amount: e.target.value })} /></Field>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ATMInventoryDashboard() {
+  const [loading, setLoading] = useState(true);
+  const [{ atms, items, requests }, setData] = useState({ atms: [], items: [], requests: [] });
+  const [view, setView] = useState("overview");
+  const [selectedAtmId, setSelectedAtmId] = useState(null);
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState("all");
+
+  const [showAddAtm, setShowAddAtm] = useState(false);
+  const [editingAtm, setEditingAtm] = useState(null);
+  const [redeployingAtm, setRedeployingAtm] = useState(null);
+  const [showAddItem, setShowAddItem] = useState(false);
+  const [showAddRequest, setShowAddRequest] = useState(false);
+  const [reviewingRequest, setReviewingRequest] = useState(null);
+  const [showResetConfirm, setShowResetConfirm] = useState(false);
+  const [savedFlash, setSavedFlash] = useState(false);
+
+  // Initial load: browser storage first, else fetch the real fleet file.
+  useEffect(() => {
+    const stored = loadStoredData();
+    if (stored) {
+      setData(stored);
+      setLoading(false);
+      return;
+    }
+    fetch("./atms_data.json")
+      .then((r) => { if (!r.ok) throw new Error("fetch failed"); return r.json(); })
+      .then((atmsFromFile) => {
+        setData({ atms: atmsFromFile, items: [], requests: [] });
+      })
+      .catch(() => {
+        setData(fallbackSeed());
+      })
+      .finally(() => setLoading(false));
+  }, []);
+
+  useEffect(() => {
+    if (loading) return;
+    saveData({ atms, items, requests });
+    setSavedFlash(true);
+    const t = setTimeout(() => setSavedFlash(false), 1200);
+    return () => clearTimeout(t);
+  }, [atms, items, requests, loading]);
+
+  const [atmForm, setAtmForm] = useState(ATM_FORM_EMPTY);
+  const [editForm, setEditForm] = useState(ATM_FORM_EMPTY);
+  const [itemForm, setItemForm] = useState({ atm_id: "", item_type: "cash_cassette", description: "", quantity: 0, reorder_threshold: 5, unit_value: "" });
+  const emptyRequestForm = { proposed_terminal_name: "", proposed_location: "", proposed_district: "", proposed_branch: "", atm_type: "lobby", justification: "", requested_by: "" };
+  const [requestForm, setRequestForm] = useState(emptyRequestForm);
+  const [reviewNotes, setReviewNotes] = useState("");
+  const [redeployForm, setRedeployForm] = useState({ new_location: "", new_district: "", new_branch: "", new_zone_subcity: "", new_city_town: "", reason: "" });
+
+  const lowStock = useMemo(() => items.filter((i) => i.quantity <= i.reorder_threshold), [items]);
+  const totalValue = useMemo(() => items.reduce((sum, i) => sum + (Number(i.unit_value) || 0) * i.quantity, 0), [items]);
+  const activeCount = atms.filter((a) => a.status === "active").length;
+  const pendingRequests = requests.filter((r) => r.status === "pending");
+
+  const filteredAtms = useMemo(() => {
+    let list = atms;
+    if (statusFilter !== "all") list = list.filter((a) => a.status === statusFilter);
+    if (search.trim()) {
+      const q = search.trim().toLowerCase();
+      list = list.filter((a) =>
+        [a.code, a.terminal_name, a.branch, a.location, a.district, a.region, a.city_town]
+          .filter(Boolean).some((f) => String(f).toLowerCase().includes(q))
+      );
+    }
+    return list;
+  }, [atms, search, statusFilter]);
+
+  function addAtm() {
+    if (!atmForm.terminal_name.trim() || !atmForm.location.trim()) return;
+    const code = atmForm.code.trim() || `ATM-${String(atms.length + 1).padStart(4, "0")}`;
+    setData((d) => ({ ...d, atms: [...d.atms, { id: uid(), ...atmForm, code, deployment_history: [] }] }));
+    setAtmForm(ATM_FORM_EMPTY);
+    setShowAddAtm(false);
+  }
+
+  function openEdit(atm) {
+    setEditForm({ ...ATM_FORM_EMPTY, ...atm, insured_amount: atm.insured_amount ?? "" });
+    setEditingAtm(atm);
+  }
+  function saveEdit() {
+    setData((d) => ({ ...d, atms: d.atms.map((a) => (a.id === editingAtm.id ? { ...a, ...editForm } : a)) }));
+    setEditingAtm(null);
+  }
+
+  function openRedeploy(atm) {
+    setRedeployForm({ new_location: atm.location || "", new_district: atm.district || "", new_branch: atm.branch || "", new_zone_subcity: atm.zone_subcity || "", new_city_town: atm.city_town || "", reason: "" });
+    setRedeployingAtm(atm);
+  }
+  function submitRedeploy() {
+    const atm = redeployingAtm;
+    const historyEntry = {
+      date: todayISO(),
+      note: `Redeployed from ${atm.location || "(unspecified)"} (${atm.branch || "no branch"}) to ${redeployForm.new_location} (${redeployForm.new_branch || "no branch"})${redeployForm.reason ? " — " + redeployForm.reason : ""}`,
+    };
+    setData((d) => ({
+      ...d,
+      atms: d.atms.map((a) => a.id === atm.id ? {
+        ...a,
+        location: redeployForm.new_location,
+        district: redeployForm.new_district,
+        branch: redeployForm.new_branch,
+        zone_subcity: redeployForm.new_zone_subcity,
+        city_town: redeployForm.new_city_town,
+        deployment_history: [...(a.deployment_history || []), historyEntry],
+      } : a),
+    }));
+    setRedeployingAtm(null);
+  }
+
+  function addItem() {
+    if (!itemForm.atm_id || !itemForm.description.trim()) return;
+    setData((d) => ({ ...d, items: [...d.items, { id: uid(), ...itemForm, quantity: Number(itemForm.quantity), reorder_threshold: Number(itemForm.reorder_threshold), unit_value: Number(itemForm.unit_value) || 0 }] }));
+    setItemForm({ atm_id: "", item_type: "cash_cassette", description: "", quantity: 0, reorder_threshold: 5, unit_value: "" });
+    setShowAddItem(false);
+  }
+  function addRequest() {
+    if (!requestForm.proposed_terminal_name.trim() || !requestForm.proposed_location.trim() || !requestForm.requested_by.trim()) return;
+    setData((d) => ({ ...d, requests: [...d.requests, { id: uid(), ...requestForm, requested_date: todayISO(), status: "pending", reviewed_by: null, review_notes: null }] }));
+    setRequestForm(emptyRequestForm);
+    setShowAddRequest(false);
+  }
+  function reviewRequest(status) {
+    setData((d) => ({ ...d, requests: d.requests.map((r) => (r.id === reviewingRequest.id ? { ...r, status, reviewed_by: "You", review_notes: reviewNotes || null } : r)) }));
+    setReviewingRequest(null);
+    setReviewNotes("");
+  }
+  function updateQuantity(itemId, quantity) {
+    setData((d) => ({ ...d, items: d.items.map((i) => (i.id === itemId ? { ...i, quantity: Math.max(0, quantity) } : i)) }));
+  }
+  function removeItem(itemId) { setData((d) => ({ ...d, items: d.items.filter((i) => i.id !== itemId) })); }
+  function removeAtm(atmId) {
+    setData((d) => ({ ...d, atms: d.atms.filter((a) => a.id !== atmId), items: d.items.filter((i) => i.atm_id !== atmId) }));
+    if (selectedAtmId === atmId) setSelectedAtmId(null);
+  }
+  function reloadMasterList() {
+    setLoading(true);
+    fetch("./atms_data.json")
+      .then((r) => r.json())
+      .then((atmsFromFile) => {
+        setData((d) => ({ ...d, atms: atmsFromFile }));
+      })
+      .catch(() => {})
+      .finally(() => { setLoading(false); setShowResetConfirm(false); });
+  }
+
+  const navItems = [
+    { key: "overview", label: "Overview", icon: "grid" },
+    { key: "fleet", label: "Fleet", icon: "server" },
+    { key: "inventory", label: "Inventory", icon: "package" },
+    { key: "lowstock", label: "Low stock", icon: "alert", badge: lowStock.length },
+    { key: "requests", label: "New ATM requests", icon: "clipboard", badge: pendingRequests.length },
+  ];
+
+  if (loading) {
+    return <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", color: "#5C563F", fontSize: 14 }}>Loading fleet data…</div>;
+  }
+
+  return (
+    <div style={{ display: "flex", minHeight: "100vh" }}>
+      <div style={{ width: 216, background: ink, padding: "20px 14px", display: "flex", flexDirection: "column", gap: 4, position: "sticky", top: 0, height: "100vh" }}>
+        <div style={{ padding: "0 8px 20px" }}>
+          <div style={{ fontSize: 11, letterSpacing: 1.5, color: brass, fontWeight: 700, textTransform: "uppercase" }}>NIB · Field Ops</div>
+          <div style={{ fontSize: 15, fontWeight: 700, color: inkText, marginTop: 2 }}>ATM Inventory</div>
+        </div>
+        {navItems.map((n) => {
+          const activeNav = view === n.key;
+          return (
+            <button key={n.key} onClick={() => setView(n.key)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 10px", borderRadius: 7, border: "none", background: activeNav ? inkPanel : "transparent", color: activeNav ? inkText : inkTextMuted, fontSize: 13, fontWeight: 600, cursor: "pointer", textAlign: "left" }}>
+              <Icon name={n.icon} size={16} />
+              <span style={{ flex: 1 }}>{n.label}</span>
+              {!!n.badge && <span style={{ background: rust, color: "#FCEBE7", fontSize: 11, fontWeight: 700, borderRadius: 10, padding: "1px 6px" }}>{n.badge}</span>}
+            </button>
+          );
+        })}
+        <div style={{ marginTop: "auto", paddingTop: 14, borderTop: `1px solid ${inkPanel}` }}>
+          <div style={{ padding: "0 8px", fontSize: 11, color: inkTextMuted, marginBottom: 10 }}>
+            {atms.length} ATMs · {activeCount} active
+          </div>
+          <div style={{ padding: "0 8px", display: "flex", alignItems: "center", gap: 6, fontSize: 10, color: savedFlash ? moss : inkTextMuted }}>
+            <Icon name="save" size={11} /> {savedFlash ? "Saved to this browser" : "Autosaves to this browser"}
+          </div>
+          <button onClick={() => setShowResetConfirm(true)} style={{ margin: "10px 8px 0", background: "none", border: "none", color: inkTextMuted, fontSize: 11, cursor: "pointer", display: "flex", alignItems: "center", gap: 5, padding: 0 }}>
+            <Icon name="reset" size={11} /> Reload master ATM list
+          </button>
+        </div>
+      </div>
+
+      <div style={{ flex: 1, background: paper, padding: 24, overflowY: "auto" }}>
+        {view === "overview" && (
+          <div>
+            <h2 style={{ margin: "0 0 4px", fontSize: 18, fontWeight: 700, color: ink }}>Overview</h2>
+            <p style={{ margin: "0 0 20px", fontSize: 13, color: "#7A7458" }}>Fleet status and inventory health at a glance.</p>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12, marginBottom: 24 }}>
+              {[
+                { label: "Total ATMs", value: atms.length },
+                { label: "Active", value: activeCount, accent: moss },
+                { label: "Low stock items", value: lowStock.length, accent: lowStock.length ? amber : moss },
+                { label: "Pending requests", value: pendingRequests.length, accent: pendingRequests.length ? amber : moss },
+                { label: "Inventory value", value: money(totalValue), small: true },
+              ].map((s) => (
+                <Card key={s.label} style={{ padding: "14px 16px" }}>
+                  <div style={{ fontSize: 12, color: "#8A8468", fontWeight: 600, marginBottom: 6 }}>{s.label}</div>
+                  <div style={{ fontSize: s.small ? 16 : 24, fontWeight: 700, color: s.accent || ink, fontFamily: mono }}>{s.value}</div>
+                </Card>
+              ))}
+            </div>
+            <h3 style={{ fontSize: 13, fontWeight: 700, color: "#5C563F", textTransform: "uppercase", letterSpacing: 0.5, margin: "0 0 10px" }}>Recently redeployed / replaced</h3>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {atms.filter((a) => (a.deployment_history || []).length > 0).slice(0, 6).map((atm) => {
+                const last = atm.deployment_history[atm.deployment_history.length - 1];
+                return (
+                  <Card key={atm.id} style={{ padding: 12, cursor: "pointer" }} onClick={() => { setSelectedAtmId(atm.id); setView("fleet"); }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <Icon name="history" size={13} color={brass} />
+                        <span style={{ fontSize: 13, fontWeight: 600, color: ink }}>{atm.terminal_name}</span>
+                        <span style={{ fontFamily: mono, fontSize: 11, color: "#8A8468" }}>{atm.code}</span>
+                      </div>
+                      {last.date && <span style={{ fontSize: 11, color: "#8A8468", fontFamily: mono }}>{last.date}</span>}
+                    </div>
+                    <div style={{ fontSize: 12, color: "#4A4530", marginTop: 4 }}>{last.note}</div>
+                  </Card>
+                );
+              })}
+              {atms.filter((a) => (a.deployment_history || []).length > 0).length === 0 && (
+                <Card style={{ padding: 16, fontSize: 12, color: "#8A8468" }}>No redeployment history recorded yet.</Card>
+              )}
+            </div>
+          </div>
+        )}
+
+        {view === "fleet" && (
+          <div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, flexWrap: "wrap", gap: 10 }}>
+              <div>
+                <h2 style={{ margin: "0 0 4px", fontSize: 18, fontWeight: 700, color: ink }}>Fleet</h2>
+                <p style={{ margin: 0, fontSize: 13, color: "#7A7458" }}>{filteredAtms.length} of {atms.length} ATMs shown</p>
+              </div>
+              <PrimaryButton onClick={() => setShowAddAtm(true)}><Icon name="plus" size={14} /> Add ATM</PrimaryButton>
+            </div>
+            <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
+              <div style={{ position: "relative", flex: "1 1 220px" }}>
+                <span style={{ position: "absolute", left: 10, top: 9, color: "#8A8468" }}><Icon name="search" size={14} /></span>
+                <input style={{ ...inputStyle, paddingLeft: 30 }} placeholder="Search name, code, branch, location, region…" value={search} onChange={(e) => setSearch(e.target.value)} />
+              </div>
+              <select style={{ ...inputStyle, width: "auto" }} value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+                <option value="all">All statuses</option>
+                {Object.entries(STATUS_META).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+              </select>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: "70vh", overflowY: "auto" }}>
+              {filteredAtms.map((atm) => {
+                const atmItems = items.filter((i) => i.atm_id === atm.id);
+                const expanded = selectedAtmId === atm.id;
+                const typeLabel = ATM_TYPES.find((t) => t.value === atm.atm_type)?.label || atm.atm_type;
+                return (
+                  <Card key={atm.id} style={{ overflow: "hidden" }}>
+                    <div style={{ padding: 12, display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer", flexWrap: "wrap", gap: 10 }} onClick={() => setSelectedAtmId(expanded ? null : atm.id)}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
+                        <div style={{ fontFamily: mono, fontWeight: 700, fontSize: 12, color: ink, minWidth: 76 }}>{atm.code}</div>
+                        <div style={{ minWidth: 0 }}>
+                          <div style={{ fontSize: 13, fontWeight: 600, color: "#2A2418", overflow: "hidden", textOverflow: "ellipsis" }}>{atm.terminal_name}</div>
+                          <div style={{ fontSize: 11, color: "#8A8468" }}>{atm.branch} · {atm.region}</div>
+                        </div>
+                      </div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                        <span style={{ fontSize: 11, color: "#8A8468" }}>{atmItems.length} items</span>
+                        <StatusBadge status={atm.status} />
+                        <button onClick={(e) => { e.stopPropagation(); openRedeploy(atm); }} title="Redeploy" style={{ background: "none", border: "none", cursor: "pointer", color: brass }}><Icon name="move" size={14} /></button>
+                        <button onClick={(e) => { e.stopPropagation(); openEdit(atm); }} title="Edit" style={{ background: "none", border: "none", cursor: "pointer", color: "#5C563F" }}><Icon name="edit" size={14} /></button>
+                        <button onClick={(e) => { e.stopPropagation(); removeAtm(atm.id); }} title="Delete" style={{ background: "none", border: "none", cursor: "pointer", color: "#B2A98E" }}><Icon name="trash" size={14} /></button>
+                      </div>
+                    </div>
+                    {expanded && (
+                      <div style={{ borderTop: "1px solid #EAE5D3", padding: 14, background: "#FBFAF5" }}>
+                        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10, marginBottom: 14, fontSize: 12 }}>
+                          <div><span style={{ color: "#8A8468" }}>Type</span><div style={{ color: "#2A2418", textTransform: "capitalize" }}>{typeLabel} · {atm.location_type || "—"}</div></div>
+                          <div><span style={{ color: "#8A8468" }}>Vendor</span><div style={{ color: "#2A2418" }}>{atm.vendor || "—"}</div></div>
+                          <div><span style={{ color: "#8A8468" }}>Serial</span><div style={{ fontFamily: mono, color: "#2A2418" }}>{atm.serial_number || "—"}</div></div>
+                          <div><span style={{ color: "#8A8468" }}>Installed</span><div style={{ color: "#2A2418" }}>{atm.installed_date || "—"}</div></div>
+                          <div><span style={{ color: "#8A8468" }}>Insured</span><div style={{ color: "#2A2418" }}>{atm.insured_amount ? money(atm.insured_amount) : "—"}</div></div>
+                          <div><span style={{ color: "#8A8468" }}>OS</span><div style={{ color: "#2A2418" }}>{atm.operating_system || "—"}</div></div>
+                          <div style={{ gridColumn: "1 / -1" }}><span style={{ color: "#8A8468" }}>Location</span><div style={{ color: "#2A2418" }}>{atm.location} {atm.latitude ? ` · ${atm.latitude}, ${atm.longitude}` : ""}</div></div>
+                        </div>
+                        {(atm.deployment_history || []).length > 0 && (
+                          <div style={{ marginBottom: 14 }}>
+                            <div style={{ fontSize: 11, fontWeight: 700, color: "#5C563F", textTransform: "uppercase", marginBottom: 6, display: "flex", alignItems: "center", gap: 5 }}><Icon name="history" size={12} /> Deployment history</div>
+                            {atm.deployment_history.map((h, i) => (
+                              <div key={i} style={{ fontSize: 12, color: "#4A4530", padding: "4px 0", borderTop: i > 0 ? "1px solid #EAE5D3" : "none" }}>
+                                {h.date && <span style={{ fontFamily: mono, color: "#8A8468", marginRight: 6 }}>{h.date}</span>}
+                                {h.note}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        {atmItems.length === 0 ? (
+                          <div style={{ fontSize: 12, color: "#8A8468" }}>No inventory items logged for this ATM.</div>
+                        ) : (
+                          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                            <thead><tr style={{ textAlign: "left", color: "#8A8468" }}><th style={{ fontWeight: 600, padding: "4px 0" }}>Item</th><th style={{ fontWeight: 600 }}>Stock</th><th style={{ fontWeight: 600 }}>Threshold</th></tr></thead>
+                            <tbody>
+                              {atmItems.map((it) => {
+                                const meta = ITEM_TYPES.find((t) => t.value === it.item_type);
+                                return (
+                                  <tr key={it.id}>
+                                    <td style={{ padding: "6px 0", display: "flex", alignItems: "center", gap: 6 }}><Icon name={meta?.icon || "package"} size={13} color="#8A8468" />{it.description}</td>
+                                    <td><StockGauge quantity={it.quantity} threshold={it.reorder_threshold} /></td>
+                                    <td style={{ fontFamily: mono }}>{it.reorder_threshold}</td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        )}
+                      </div>
+                    )}
+                  </Card>
+                );
+              })}
+              {filteredAtms.length === 0 && <Card style={{ padding: 20, textAlign: "center", fontSize: 13, color: "#8A8468" }}>No ATMs match your search.</Card>}
+            </div>
+          </div>
+        )}
+
+        {view === "inventory" && (
+          <div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 10 }}>
+              <div>
+                <h2 style={{ margin: "0 0 4px", fontSize: 18, fontWeight: 700, color: ink }}>Inventory</h2>
+                <p style={{ margin: 0, fontSize: 13, color: "#7A7458" }}>{items.length} items across the fleet</p>
+              </div>
+              <PrimaryButton onClick={() => setShowAddItem(true)}><Icon name="plus" size={14} /> Add item</PrimaryButton>
+            </div>
+            <Card style={{ padding: 4, overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 560 }}>
+                <thead><tr style={{ textAlign: "left", color: "#8A8468", fontSize: 11, textTransform: "uppercase", letterSpacing: 0.3 }}><th style={{ padding: "10px 14px" }}>Item</th><th>ATM</th><th>Stock</th><th>Value</th><th></th></tr></thead>
+                <tbody>
+                  {items.map((it) => {
+                    const meta = ITEM_TYPES.find((t) => t.value === it.item_type);
+                    const atm = atms.find((a) => a.id === it.atm_id);
+                    return (
+                      <tr key={it.id} style={{ borderTop: "1px solid #EAE5D3" }}>
+                        <td style={{ padding: "10px 14px", display: "flex", alignItems: "center", gap: 8 }}><Icon name={meta?.icon || "package"} size={14} color="#8A8468" />{it.description}</td>
+                        <td style={{ fontFamily: mono, fontSize: 12 }}>{atm?.code || "—"}</td>
+                        <td>
+                          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                            <StockGauge quantity={it.quantity} threshold={it.reorder_threshold} />
+                            <button onClick={() => updateQuantity(it.id, it.quantity - 1)} style={miniBtn}>−</button>
+                            <button onClick={() => updateQuantity(it.id, it.quantity + 1)} style={miniBtn}>+</button>
+                          </div>
+                        </td>
+                        <td style={{ fontFamily: mono, fontSize: 12 }}>{money(it.unit_value)}</td>
+                        <td><button onClick={() => removeItem(it.id)} style={{ background: "none", border: "none", cursor: "pointer", color: "#B2A98E" }}><Icon name="trash" size={13} /></button></td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </Card>
+          </div>
+        )}
+
+        {view === "lowstock" && (
+          <div>
+            <h2 style={{ margin: "0 0 4px", fontSize: 18, fontWeight: 700, color: ink }}>Low stock</h2>
+            <p style={{ margin: "0 0 16px", fontSize: 13, color: "#7A7458" }}>Items at or below their reorder threshold — {lowStock.length} flagged.</p>
+            {lowStock.length === 0 ? (
+              <Card style={{ padding: 24, textAlign: "center" }}><div style={{ color: moss, fontWeight: 600, fontSize: 13 }}>Nothing needs restocking right now.</div></Card>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {lowStock.map((it) => {
+                  const atm = atms.find((a) => a.id === it.atm_id);
+                  const meta = ITEM_TYPES.find((t) => t.value === it.item_type);
+                  return (
+                    <Card key={it.id} style={{ padding: 12, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                        <div style={{ width: 30, height: 30, borderRadius: 7, background: it.quantity === 0 ? "#FBEAE4" : "#FBF0DB", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                          <Icon name={meta?.icon || "package"} size={15} color={it.quantity === 0 ? rust : amber} />
+                        </div>
+                        <div>
+                          <div style={{ fontSize: 13, fontWeight: 600, color: "#2A2418" }}>{it.description}</div>
+                          <div style={{ fontSize: 11, color: "#8A8468", fontFamily: mono }}>{atm?.code} · {atm?.branch}</div>
+                        </div>
+                      </div>
+                      <StockGauge quantity={it.quantity} threshold={it.reorder_threshold} />
+                    </Card>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
+        {view === "requests" && (
+          <div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 10 }}>
+              <div>
+                <h2 style={{ margin: "0 0 4px", fontSize: 18, fontWeight: 700, color: ink }}>New ATM requests</h2>
+                <p style={{ margin: 0, fontSize: 13, color: "#7A7458" }}>{pendingRequests.length} pending review</p>
+              </div>
+              <PrimaryButton onClick={() => setShowAddRequest(true)}><Icon name="plus" size={14} /> New request</PrimaryButton>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              {requests.map((r) => (
+                <Card key={r.id} style={{ padding: 14 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 10 }}>
+                    <div>
+                      <div style={{ fontSize: 14, fontWeight: 700, color: ink }}>{r.proposed_terminal_name}</div>
+                      <div style={{ fontSize: 12, color: "#7A7458", marginTop: 2, display: "flex", alignItems: "center", gap: 4 }}><Icon name="pin" size={11} />{r.proposed_location} · {r.proposed_district}</div>
+                      <div style={{ fontSize: 11, color: "#8A8468", marginTop: 4 }}>Requested by {r.requested_by} on {r.requested_date}</div>
+                    </div>
+                    <StatusBadge status={r.status} metaMap={REQUEST_STATUS_META} />
+                  </div>
+                  {r.justification && <div style={{ fontSize: 12, color: "#4A4530", marginTop: 10, lineHeight: 1.5 }}>{r.justification}</div>}
+                  {r.review_notes && <div style={{ fontSize: 11, color: "#8A8468", marginTop: 8, fontStyle: "italic" }}>{r.reviewed_by}: {r.review_notes}</div>}
+                  {r.status === "pending" && <div style={{ marginTop: 10 }}><GhostButton onClick={() => setReviewingRequest(r)}>Review</GhostButton></div>}
+                </Card>
+              ))}
+              {requests.length === 0 && <Card style={{ padding: 20, textAlign: "center", fontSize: 13, color: "#8A8468" }}>No requests yet.</Card>}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {showAddAtm && (
+        <Modal title="Add ATM" onClose={() => setShowAddAtm(false)} width={460}>
+          <AtmFormFields form={atmForm} setForm={setAtmForm} />
+          <PrimaryButton onClick={addAtm} style={{ justifyContent: "center", marginTop: 14, width: "100%" }}>Add ATM</PrimaryButton>
+        </Modal>
+      )}
+
+      {editingAtm && (
+        <Modal title={`Edit: ${editingAtm.terminal_name}`} onClose={() => setEditingAtm(null)} width={460}>
+          <AtmFormFields form={editForm} setForm={setEditForm} />
+          <PrimaryButton onClick={saveEdit} style={{ justifyContent: "center", marginTop: 14, width: "100%" }}>Save changes</PrimaryButton>
+        </Modal>
+      )}
+
+      {redeployingAtm && (
+        <Modal title={`Redeploy: ${redeployingAtm.terminal_name}`} onClose={() => setRedeployingAtm(null)} width={420}>
+          <p style={{ fontSize: 12, color: "#7A7458", margin: "0 0 12px" }}>
+            Current: {redeployingAtm.location} ({redeployingAtm.branch || "no branch"}). This logs the move in the ATM's history.
+          </p>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            <Field label="New location / area"><input style={inputStyle} value={redeployForm.new_location} onChange={(e) => setRedeployForm({ ...redeployForm, new_location: e.target.value })} /></Field>
+            <div style={{ display: "flex", gap: 8 }}>
+              <Field label="New branch"><input style={inputStyle} value={redeployForm.new_branch} onChange={(e) => setRedeployForm({ ...redeployForm, new_branch: e.target.value })} /></Field>
+              <Field label="New district"><input style={inputStyle} value={redeployForm.new_district} onChange={(e) => setRedeployForm({ ...redeployForm, new_district: e.target.value })} /></Field>
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <Field label="New zone/sub-city"><input style={inputStyle} value={redeployForm.new_zone_subcity} onChange={(e) => setRedeployForm({ ...redeployForm, new_zone_subcity: e.target.value })} /></Field>
+              <Field label="New city/town"><input style={inputStyle} value={redeployForm.new_city_town} onChange={(e) => setRedeployForm({ ...redeployForm, new_city_town: e.target.value })} /></Field>
+            </div>
+            <Field label="Reason (optional)"><textarea style={{ ...inputStyle, minHeight: 50, resize: "vertical" }} value={redeployForm.reason} onChange={(e) => setRedeployForm({ ...redeployForm, reason: e.target.value })} /></Field>
+            <PrimaryButton onClick={submitRedeploy} style={{ justifyContent: "center", marginTop: 4, background: brass }}><Icon name="move" size={14} /> Confirm redeployment</PrimaryButton>
+          </div>
+        </Modal>
+      )}
+
+      {showAddItem && (
+        <Modal title="Add inventory item" onClose={() => setShowAddItem(false)}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            <Field label="ATM"><select style={inputStyle} value={itemForm.atm_id} onChange={(e) => setItemForm({ ...itemForm, atm_id: e.target.value })}><option value="">Select ATM…</option>{atms.map((a) => <option key={a.id} value={a.id}>{a.code} — {a.terminal_name}</option>)}</select></Field>
+            <Field label="Item type"><select style={inputStyle} value={itemForm.item_type} onChange={(e) => setItemForm({ ...itemForm, item_type: e.target.value })}>{ITEM_TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}</select></Field>
+            <Field label="Description"><input style={inputStyle} placeholder="100 birr cassette" value={itemForm.description} onChange={(e) => setItemForm({ ...itemForm, description: e.target.value })} /></Field>
+            <div style={{ display: "flex", gap: 8 }}>
+              <Field label="Quantity"><input type="number" style={inputStyle} value={itemForm.quantity} onChange={(e) => setItemForm({ ...itemForm, quantity: e.target.value })} /></Field>
+              <Field label="Reorder at"><input type="number" style={inputStyle} value={itemForm.reorder_threshold} onChange={(e) => setItemForm({ ...itemForm, reorder_threshold: e.target.value })} /></Field>
+            </div>
+            <Field label="Unit value (ETB)"><input type="number" style={inputStyle} value={itemForm.unit_value} onChange={(e) => setItemForm({ ...itemForm, unit_value: e.target.value })} /></Field>
+            <PrimaryButton onClick={addItem} style={{ justifyContent: "center", marginTop: 6 }}>Add item</PrimaryButton>
+          </div>
+        </Modal>
+      )}
+
+      {showAddRequest && (
+        <Modal title="New ATM request" onClose={() => setShowAddRequest(false)} width={420}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            <Field label="Terminal name"><input style={inputStyle} value={requestForm.proposed_terminal_name} onChange={(e) => setRequestForm({ ...requestForm, proposed_terminal_name: e.target.value })} /></Field>
+            <Field label="Location"><input style={inputStyle} value={requestForm.proposed_location} onChange={(e) => setRequestForm({ ...requestForm, proposed_location: e.target.value })} /></Field>
+            <div style={{ display: "flex", gap: 8 }}>
+              <Field label="District"><input style={inputStyle} value={requestForm.proposed_district} onChange={(e) => setRequestForm({ ...requestForm, proposed_district: e.target.value })} /></Field>
+              <Field label="Branch"><input style={inputStyle} value={requestForm.proposed_branch} onChange={(e) => setRequestForm({ ...requestForm, proposed_branch: e.target.value })} /></Field>
+            </div>
+            <Field label="ATM type"><select style={inputStyle} value={requestForm.atm_type} onChange={(e) => setRequestForm({ ...requestForm, atm_type: e.target.value })}>{ATM_TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}</select></Field>
+            <Field label="Justification"><textarea style={{ ...inputStyle, minHeight: 60, resize: "vertical" }} value={requestForm.justification} onChange={(e) => setRequestForm({ ...requestForm, justification: e.target.value })} /></Field>
+            <Field label="Requested by"><input style={inputStyle} value={requestForm.requested_by} onChange={(e) => setRequestForm({ ...requestForm, requested_by: e.target.value })} /></Field>
+            <PrimaryButton onClick={addRequest} style={{ justifyContent: "center", marginTop: 6 }}>Submit request</PrimaryButton>
+          </div>
+        </Modal>
+      )}
+
+      {reviewingRequest && (
+        <Modal title={`Review: ${reviewingRequest.proposed_terminal_name}`} onClose={() => { setReviewingRequest(null); setReviewNotes(""); }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            <Field label="Notes"><textarea style={{ ...inputStyle, minHeight: 60, resize: "vertical" }} value={reviewNotes} onChange={(e) => setReviewNotes(e.target.value)} /></Field>
+            <div style={{ display: "flex", gap: 8 }}>
+              <PrimaryButton onClick={() => reviewRequest("approved")} style={{ flex: 1, justifyContent: "center", background: moss }}><Icon name="check" size={14} /> Approve</PrimaryButton>
+              <PrimaryButton onClick={() => reviewRequest("rejected")} style={{ flex: 1, justifyContent: "center", background: rust }}><Icon name="ban" size={14} /> Reject</PrimaryButton>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {showResetConfirm && (
+        <Modal title="Reload master ATM list?" onClose={() => setShowResetConfirm(false)}>
+          <p style={{ fontSize: 13, color: "#4A4530", lineHeight: 1.5, margin: "0 0 14px" }}>
+            This replaces your current ATM list with the original atms_data.json file. Inventory items and ATM requests are kept. Any edits you've made to ATMs will be lost.
+          </p>
+          <div style={{ display: "flex", gap: 8 }}>
+            <GhostButton onClick={() => setShowResetConfirm(false)} style={{ flex: 1, justifyContent: "center" }}>Cancel</GhostButton>
+            <PrimaryButton onClick={reloadMasterList} style={{ flex: 1, justifyContent: "center", background: rust }}>Reload</PrimaryButton>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+const miniBtn = { width: 20, height: 20, borderRadius: 4, border: "1px solid #DCD6C2", background: "#FBFAF5", cursor: "pointer", fontSize: 12, lineHeight: 1, color: "#5C563F" };
+
+ReactDOM.createRoot(document.getElementById("root")).render(<ATMInventoryDashboard />);
+</script>
+</body>
+</html>
